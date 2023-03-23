@@ -1,6 +1,8 @@
 import os
 import requests
 from tqdm import tqdm
+from zipfile import ZipFile
+
 
 # function to decode url-encoded filename
 def decode_filename(encoded_filename):
@@ -10,24 +12,25 @@ def decode_filename(encoded_filename):
 def download_with_retry(url, filename):
     retry = 0
     while retry < 3:
-        # check if the file already exists
-        if os.path.exists(filename):
-            file_size = os.path.getsize(filename)
-            headers = {'Range': f'bytes={file_size}-'}
-            response = requests.get(url, headers=headers, stream=True)
-            mode = 'ab'  # append to the file if it already exists
-        else:
-            response = requests.get(url, stream=True)
-            mode = 'wb'  # write a new file if it doesn't exist
-        if response.status_code == 200 or response.status_code == 206:
-            with open(filename, mode) as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    # update progress bar
-                    progress_bar.update(len(chunk))
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(filename, 'wb') as f:
+                f.write(response.content)
             return True
         retry += 1
     return False
+
+# function to check if a zip file is valid
+# def is_zipfile_valid(filename):
+#     with zipfile.ZipFile(filename) as zf:
+#         return zf.testzip() is None
+def is_zipfile_valid(zip_filename):
+    try:
+        with ZipFile(zip_filename) as zf:
+            return zf.testzip() is None
+    except Exception as e:
+        print(f"Error validating {zip_filename}: {e}")
+        return False
 
 # base url for the files
 base_url = 'https://the-eye.eu/public/Games/eXo/eXoDOS_v5/eXo/eXoDOS/'
@@ -43,12 +46,19 @@ for line in html_page.splitlines():
         href_value = line[href_start:href_end]
         filename = decode_filename(href_value)
         download_url = base_url + href_value
-        if not os.path.exists(filename):
-            print(f"Downloading {filename}...")
-            with tqdm(unit='B', unit_scale=True, miniters=1, desc=filename) as progress_bar:
+        if os.path.exists(filename):
+            if is_zipfile_valid(filename):
+                print(f"Skipping {filename} - already downloaded and valid.")
+                continue
+            else:
+                print(f"{filename} exists but is not a valid zip file. Redownloading...")
+        print(f"Downloading {filename}...")
+        with tqdm(unit='B', unit_scale=True, miniters=1, desc=filename) as progress_bar:
+            success = download_with_retry(download_url, filename)
+            while not success:
+                print(f"Retrying {filename}...")
                 success = download_with_retry(download_url, filename)
-                while not success:
-                    print(f"Retrying {filename}...")
-                    success = download_with_retry(download_url, filename)
-        else:
-            print(f"{filename} already exists. Skipping download.")
+            progress_bar.update(len(requests.get(download_url).content))
+        if not is_zipfile_valid(filename):
+            os.remove(filename)
+            print(f"{filename} is not a valid zip file. Deleted.")
