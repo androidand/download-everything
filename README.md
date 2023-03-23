@@ -1,21 +1,29 @@
-## Download Everything
-This script fetches a web page, identifies all files with the ".zip" extension, and downloads them to a specified directory. If a file has already been downloaded (by matching both the filename and the size of the file), it will be skipped. The script also provides a progress update for each downloaded file.
+Sure, here's an example README.md file:
+
+Download Everything
+===================
+
+This script downloads all .zip files from a given URL and verifies their integrity.
+
+Requirements
+------------
+
+*   Python 3.x
+*   tqdm
+
 Usage
-The script can be run from the command line with the following command:
+-----
 
+1.  Install tqdm: `pip install tqdm`
+2.  Clone this repository: `git clone https://github.com/your_username/download-everything.git`
+3.  Open a terminal window and navigate to the downloaded repository: `cd download-everything`
+4.  Run the script: `python download.py`
 
+The script will prompt you to enter the URL from which you want to download the .zip files. Once you enter the URL, the script will start downloading the .zip files and verifying their integrity.
 
-python download.py <url> <directory>
-* url (optional): the URL of the web page to fetch files from. If not provided, the default URL will be used.
-* directory (optional): the name of the directory to download files to. If not provided, the default directory "downloads" will be used.
-Example usage:
+The downloaded files will be saved in the same directory as the script. If a file with the same name already exists in the directory, the script will skip the download and verify the integrity of the existing file.
 
+Acknowledgements
+----------------
 
-
-python download.py "https://example.com/downloads/" "my_downloads"
-This will fetch all files with the ".zip" extension from the URL "https://example.com/downloads/", and download them to the directory "my_downloads". If a file has already been downloaded, it will be skipped. The script will output a progress update for each downloaded file.
-Note: The script requires the Python requests and beautifulsoup4 libraries to be installed. If you don't have them installed, you can install them with the following command:
-
-
-pip install requests beautifulsoup4
-To ensure that the downloaded files are not committed to version control, add the "downloads" directory to your .gitignore file.
+This script was dictated, reviewed and tested by [Andreas](https://github.com/androidand) and mostly written by ChatGPT, GPT-4 architecture.
