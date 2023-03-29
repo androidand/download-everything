@@ -6,6 +6,11 @@ import sys
 from tqdm.auto import tqdm
 from zipfile import ZipFile
 from concurrent.futures import ThreadPoolExecutor
+import threading
+
+# Global variable to store the current downloading file
+current_downloading_file = None
+current_downloading_file_lock = threading.Lock()
 
 
 class TqdmConnectionErrorWrapper(tqdm):
@@ -59,7 +64,16 @@ def is_zipfile_valid(zip_filename):
 
 
 def signal_handler(signal, frame):
-    print("\nProgram interrupted. Finishing up and exiting.")
+    global current_downloading_file
+    global current_downloading_file_lock
+
+    print("\nProgram interrupted. Cleaning up and exiting.")
+
+    with current_downloading_file_lock:
+        if current_downloading_file and os.path.exists(current_downloading_file):
+            print(f"Deleting unfinished file {current_downloading_file}")
+            os.remove(current_downloading_file)
+
     sys.exit("Exiting")
 
 
@@ -76,8 +90,16 @@ def write_validated_file(file_path, filename):
 
 
 def download_and_validate_file(base_url, link, validated_files, validated_files_path):
+
+    global current_downloading_file
+    global current_downloading_file_lock
+
     filename = decode_filename(link['href'])
     download_url = base_url + link['href']
+
+    with current_downloading_file_lock:
+        current_downloading_file = filename
+
     if filename in validated_files:
         print(f"Skipping {filename} - already validated.")
         return
