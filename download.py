@@ -1,31 +1,54 @@
 import os
 import requests
+from bs4 import BeautifulSoup
 import signal
-from tqdm import tqdm
+import sys
+from tqdm.auto import tqdm
 from zipfile import ZipFile
+from concurrent.futures import ThreadPoolExecutor
 
-# function to decode url-encoded filename
+
+class TqdmConnectionErrorWrapper(tqdm):
+    def update_to(self, b=1, bsize=1, tsize=None):
+        if tsize is not None:
+            self.total = tsize
+        self.update(b * bsize - self.n)
+
+    def set_description_from_response(self, response):
+        if response.headers.get("Content-Length"):
+            self.total = int(response.headers["Content-Length"])
+            self.refresh()
+
+        content_disposition = response.headers.get("Content-Disposition")
+        if content_disposition:
+            filename = content_disposition.split("filename=")[-1].strip('"')
+            self.set_description(filename)
+
+
 def decode_filename(encoded_filename):
     return requests.utils.unquote(encoded_filename)
 
-# function to download file from url and retry on failure
+
 def download_with_retry(url, filename):
-    retry = 0
-    while retry < 3:
+    for retry in range(3):
         try:
-            response = requests.get(url)
-            if response.status_code == 200:
-                with open(filename, 'wb') as f:
-                    f.write(response.content)
-                return True
+            with requests.get(url, timeout=10, stream=True) as response:
+                response.raise_for_status()
+                with TqdmConnectionErrorWrapper(unit='B', unit_scale=True, miniters=1, desc=filename) as progress_bar:
+                    progress_bar.set_description_from_response(response)
+                    with open(filename, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                progress_bar.update_to(len(chunk))
+                    return True
         except requests.exceptions.RequestException as e:
             print(f"Error downloading {filename}: {e}")
-        retry += 1
     if os.path.exists(filename):
         os.remove(filename)
     return False
 
-# function to check if a zip file is valid
+
 def is_zipfile_valid(zip_filename):
     try:
         with ZipFile(zip_filename) as zf:
@@ -34,66 +57,61 @@ def is_zipfile_valid(zip_filename):
         print(f"Error validating {zip_filename}: {e}")
         return False
 
-# define signal handler to handle interrupts
+
 def signal_handler(signal, frame):
     print("\nProgram interrupted. Finishing up and exiting.")
-    global interrupted
-    interrupted = True
+    sys.exit("Exiting")
+
+
+def read_validated_files(file_path):
+    if not os.path.exists(file_path):
+        open(file_path, 'a').close()
+    with open(file_path, 'r') as f:
+        return set(line.strip() for line in f)
+
+
+def write_validated_file(file_path, filename):
+    with open(file_path, 'a') as f:
+        f.write(filename + '\n')
+
+
+def download_and_validate_file(base_url, link, validated_files, validated_files_path):
+    filename = decode_filename(link['href'])
+    download_url = base_url + link['href']
+    if filename in validated_files:
+        print(f"Skipping {filename} - already validated.")
+        return
+    if os.path.exists(filename) and is_zipfile_valid(filename):
+        print(f"Skipping {filename} - already downloaded and valid.")
+        validated_files.add(filename)
+        return
+    print(f"Downloading {filename}...")
+    success = download_with_retry(download_url, filename)
+    if success and is_zipfile_valid(filename):
+        print(f"{filename} downloaded and validated.")
+        validated_files.add(filename)
+        write_validated_file(validated_files_path, filename)
+    else:
+        print(f"{filename} is not a valid zip file. Deleting...")
+        if os.path.exists(filename):
+            os.remove(filename)
+
 
 def main():
-    # set up interrupt handler
     signal.signal(signal.SIGINT, signal_handler)
 
-    # create validated_files if it does not exist
-    if not os.path.exists('validated_files'):
-        open('validated_files', 'a').close()
-
-    # read validated_files into a set
-    with open('validated_files', 'r') as f:
-        validated_files = set(line.strip() for line in f)
-
-    # base url for the files
+    validated_files_path = 'validated_files'
+    validated_files = read_validated_files(validated_files_path)
     base_url = 'https://the-eye.eu/public/Games/eXo/eXoDOS_v5/eXo/eXoDOS/'
-
-    # retrieve the HTML page with links
     html_page = requests.get(base_url).text
+    soup = BeautifulSoup(html_page, 'html.parser')
+    links = soup.find_all('a', href=lambda x: x and x.endswith('.zip'))
 
-    # loop through each link and download the corresponding file
-    interrupted = False
-    for line in html_page.splitlines():
-        if '.zip' in line:
-            href_start = line.find('href=') + 6
-            href_end = line.find('.zip') + 4
-            href_value = line[href_start:href_end]
-            filename = decode_filename(href_value)
-            download_url = base_url + href_value
-            if filename in validated_files:
-                print(f"Skipping {filename} - already validated.")
-                continue
-            if os.path.exists(filename):
-                if is_zipfile_valid(filename):
-                    print(f"Skipping {filename} - already downloaded and valid.")
-                    validated_files.add(filename)
-                    continue
-                else:
-                    print(f"{filename} exists but is not a valid zip file. Redownloading...")
-            print(f"Downloading {filename}...")
-            with tqdm(unit='B', unit_scale=True, miniters=1, desc=filename) as progress_bar:
-                success = download_with_retry(download_url, filename)
-                while not success and not interrupted:
-                    print(f"Retrying {filename}...")
-                    success = download_with_retry(download_url, filename)
-                if interrupted:
-                    break
-                progress_bar.update(len(requests.get(download_url).content))
-            if is_zipfile_valid(filename):
-                print(f"{filename} downloaded and validated.")
-                validated_files.add(filename)
-                with open('validated_files', 'a') as f:
-                    f.write(filename + '\n')
-            else:
-                print(f"{filename} is not a valid zip file. Deleting...")
-                os.remove(filename)
+    with ThreadPoolExecutor() as executor:
+        for link in links:
+            executor.submit(download_and_validate_file, base_url,
+                            link, validated_files, validated_files_path)
+
 
 if __name__ == "__main__":
     main()
